@@ -1,0 +1,7 @@
+model_path: models/rag_router
+confidence_threshold: 0.85
+intent_classes:
+  0: 'factual'
+  1: 'analytical'
+  2: 'conversational'
+  3: 'temporal'

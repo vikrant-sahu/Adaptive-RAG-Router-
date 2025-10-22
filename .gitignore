@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+
+# Data
+data/
+outputs/
+*.onnx
+
+# Logs
+logs/
+*.log
+
+# Docker
+*.docker
+
+# Jupyter Notebooks
+.ipynb_checkpoints
