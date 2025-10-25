@@ -13,9 +13,9 @@ from datetime import datetime
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from training.train_models import ModelTrainer
-from evaluation.lora_ablation import LoRAAblationStudy
-from benchmarks.llm_benchmark import LLMBenchmark
+from adaptive_rag_router.training.trainer import ModelTrainer
+from adaptive_rag_router.evaluation.ablation_study import LoRAAblationStudy
+from adaptive_rag_router.benchmarks.llm_benchmark import LLMBenchmark
 
 def setup_logging():
     """Setup comprehensive logging"""
