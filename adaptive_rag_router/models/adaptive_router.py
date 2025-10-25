@@ -1,6 +1,7 @@
 # File: adaptive_rag_router/models/adaptive_router.py
 """
 Production-ready model with unified interface
+Optimized for Kaggle/Colab GPU environments
 """
 
 import torch
@@ -15,6 +16,7 @@ from transformers import (
 from peft import get_peft_model, LoraConfig, TaskType
 from typing import Dict, List, Optional, Union
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,10 @@ class AdaptiveRAGRouter:
         self.model_name = model_name
         self.num_domains = num_domains
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Detect environment
+        self.is_kaggle = 'KAGGLE_KERNEL_RUN_TYPE' in os.environ
+        self.is_colab = 'COLAB_GPU' in os.environ
         
         # Default LoRA config
         if lora_config is None:
@@ -49,7 +55,14 @@ class AdaptiveRAGRouter:
         self._initialize_model()
     
     def _initialize_model(self):
-        """Initialize model with proper error handling"""
+        """
+        Initialize model with proper error handling
+        
+        CHANGE 4: Added GPU optimization for Kaggle
+        - device_map="auto" for automatic GPU placement
+        - low_cpu_mem_usage for faster loading
+        - Explicit FP16 handling for Kaggle T4 GPUs
+        """
         try:
             # Load configuration
             config = AutoConfig.from_pretrained(
@@ -59,11 +72,17 @@ class AdaptiveRAGRouter:
                 attention_probs_dropout_prob=0.1
             )
             
-            # Load model
+            # CHANGE 4: Kaggle GPU optimization
+            use_fp16 = torch.cuda.is_available()
+            device_map = "auto" if (self.is_kaggle or self.is_colab) and torch.cuda.is_available() else None
+            
+            # Load model with optimizations
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_name,
                 config=config,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                torch_dtype=torch.float16 if use_fp16 else torch.float32,
+                device_map=device_map,  # Auto GPU placement on Kaggle
+                low_cpu_mem_usage=True  # Faster loading
             )
             
             # Apply LoRA
@@ -73,7 +92,10 @@ class AdaptiveRAGRouter:
             )
             
             self.model = get_peft_model(self.model, peft_config)
-            self.model.to(self.device)
+            
+            # Move to device only if device_map wasn't used
+            if device_map is None:
+                self.model.to(self.device)
             
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
@@ -86,6 +108,11 @@ class AdaptiveRAGRouter:
             logger.info(f"Initialized {self.model_name} on {self.device}")
             logger.info(f"Trainable parameters: {trainable_params:,} ({trainable_params/total_params*100:.2f}%)")
             
+            if self.is_kaggle:
+                logger.info("🚀 Running on Kaggle with GPU optimizations")
+            elif self.is_colab:
+                logger.info("🚀 Running on Colab with GPU optimizations")
+            
         except Exception as e:
             logger.error(f"Failed to initialize model: {e}")
             raise
@@ -97,13 +124,28 @@ class AdaptiveRAGRouter:
         output_dir: str = "./model_checkpoints",
         training_config: Optional[Dict] = None
     ):
-        """Train the model with production-ready configuration"""
+        """
+        Train the model with production-ready configuration
+        
+        CHANGE 2: Use Kaggle output directory
+        CHANGE 5: Add progress bars and better logging
+        """
+        # CHANGE 2: Use Kaggle/Colab output directory
+        if self.is_kaggle:
+            output_dir = output_dir.replace("./", "/kaggle/working/")
+        elif self.is_colab:
+            output_dir = output_dir.replace("./", "/content/")
+        
         if training_config is None:
             training_config = {
                 "num_epochs": 5,
                 "learning_rate": 2e-4,
                 "per_device_train_batch_size": 16,
             }
+        
+        # CHANGE 5: Enhanced logging for progress tracking
+        from transformers import logging as hf_logging
+        hf_logging.set_verbosity_info()
         
         training_args = TrainingArguments(
             output_dir=output_dir,
@@ -122,8 +164,10 @@ class AdaptiveRAGRouter:
             metric_for_best_model="accuracy",
             greater_is_better=True,
             report_to=None,
-            dataloader_pin_memory=False,
+            dataloader_pin_memory=True,  # CHANGE: Set to True for GPU performance
             fp16=torch.cuda.is_available(),
+            dataloader_num_workers=0,  # Kaggle compatibility
+            disable_tqdm=False,  # CHANGE 5: Enable progress bars
         )
         
         trainer = Trainer(
@@ -135,13 +179,19 @@ class AdaptiveRAGRouter:
         )
         
         logger.info("Starting training...")
+        logger.info(f"Output directory: {output_dir}")
         trainer.train()
         
         # Save the model
         trainer.save_model()
         self.tokenizer.save_pretrained(output_dir)
         
-        logger.info(f"Training completed. Model saved to {output_dir}")
+        logger.info(f"✅ Training completed. Model saved to {output_dir}")
+        
+        # CHANGE 6: GPU memory cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.info("🧹 GPU memory cleared")
         
         return trainer
     
@@ -201,6 +251,12 @@ class AdaptiveRAGRouter:
     
     def save(self, path: str):
         """Save model and tokenizer"""
+        # CHANGE 2: Handle Kaggle paths
+        if self.is_kaggle:
+            path = path.replace("./", "/kaggle/working/")
+        elif self.is_colab:
+            path = path.replace("./", "/content/")
+        
         self.model.save_pretrained(path)
         self.tokenizer.save_pretrained(path)
         logger.info(f"Model saved to {path}")
@@ -208,6 +264,12 @@ class AdaptiveRAGRouter:
     def load(self, path: str):
         """Load model and tokenizer"""
         from peft import PeftModel
+        
+        # CHANGE 2: Handle Kaggle paths
+        if self.is_kaggle:
+            path = path.replace("./", "/kaggle/working/")
+        elif self.is_colab:
+            path = path.replace("./", "/content/")
         
         self.model = PeftModel.from_pretrained(self.model, path)
         self.tokenizer = AutoTokenizer.from_pretrained(path)

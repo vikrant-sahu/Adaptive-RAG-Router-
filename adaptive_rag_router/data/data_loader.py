@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Tuple, Optional
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader 
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +37,25 @@ class CLINC150DataLoader:
             logger.error(f"Failed to load tokenizer: {e}")
             raise
     
-    def load_dataset(self, split: str = "train", sample_size: Optional[int] = None) -> Dataset:
-        """Load dataset with optional sampling for quick experiments"""
-        try:
-            dataset = load_dataset("clinc_oos", split=split)
-        except Exception as e:
-            logger.warning(f"Failed to load clinc_oos: {e}")
-            # Fallback - you might want to implement a custom dataset loader
-            raise
+    def load_dataset(self, split: str = "train", sample_size: Optional[int] = None):
+        """
+        Load CLINC150 dataset with Kaggle optimization
         
-        if sample_size and len(dataset) > sample_size:
-            dataset = dataset.select(range(sample_size))
-            logger.info(f"Using sampled dataset with {sample_size} examples")
+         Added cache_dir for Kaggle/Colab optimization
+        """
+        # Use Kaggle's working directory for caching
+        cache_dir = None
+        if 'KAGGLE_KERNEL_RUN_TYPE' in os.environ:
+            cache_dir = "/kaggle/working/hf_cache"
+            os.makedirs(cache_dir, exist_ok=True)
+        elif 'COLAB_GPU' in os.environ:
+            cache_dir = "/content/hf_cache"
+            os.makedirs(cache_dir, exist_ok=True)
+        
+        dataset = load_dataset("clinc_oos", "plus", split=split, cache_dir=cache_dir)
+        
+        if sample_size:
+            dataset = dataset.select(range(min(sample_size, len(dataset))))
         
         return dataset
     
