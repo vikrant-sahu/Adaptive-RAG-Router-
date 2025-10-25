@@ -3,6 +3,7 @@
 Production-ready data loader with environment detection
 """
 
+import os  # ADDED: Missing import
 import logging
 from typing import Dict, Tuple, Optional
 from datasets import Dataset, load_dataset
@@ -41,11 +42,11 @@ class CLINC150DataLoader:
         """
         Load CLINC150 dataset with Kaggle optimization
         
-         Added cache_dir for Kaggle/Colab optimization
+        Added cache_dir for Kaggle/Colab optimization
         """
         # Use Kaggle's working directory for caching
         cache_dir = None
-        if 'KAGGLE_KERNEL_RUN_TYPE' in os.environ:
+        if 'KAGGLE_KERNEL_RUN_TYPE' in os.environ:  # FIXED: Correct env var
             cache_dir = "/kaggle/working/hf_cache"
             os.makedirs(cache_dir, exist_ok=True)
         elif 'COLAB_GPU' in os.environ:
@@ -100,9 +101,19 @@ class CLINC150DataLoader:
         
         # Remove original columns to save memory
         columns_to_remove = ['text', 'intent']
-        train_dataset = train_dataset.remove_columns(columns_to_remove)
-        val_dataset = val_dataset.remove_columns(columns_to_remove)
-        test_dataset = test_dataset.remove_columns(columns_to_remove)
+        # FIXED: Check if columns exist before removing
+        for col in columns_to_remove:
+            if col in train_dataset.column_names:
+                train_dataset = train_dataset.remove_columns([col])
+            if col in val_dataset.column_names:
+                val_dataset = val_dataset.remove_columns([col])
+            if col in test_dataset.column_names:
+                test_dataset = test_dataset.remove_columns([col])
+        
+        # Set format for PyTorch - ADDED for compatibility
+        train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+        val_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+        test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
         
         # Create data loaders
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)

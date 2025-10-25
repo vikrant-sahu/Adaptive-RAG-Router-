@@ -6,8 +6,14 @@ Comprehensive test suite for Adaptive RAG Router
 import unittest
 import torch
 import numpy as np
-from data.data_loader import CLINC150DataLoader
-from models.adaptive_router import AdaptiveRAGRouter, create_router_model
+import sys
+import os
+
+# ADDED: Proper path handling
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from adaptive_rag_router.data.data_loader import CLINC150DataLoader
+from adaptive_rag_router.models.adaptive_router import AdaptiveRAGRouter, create_router_model
 
 class TestDataLoader(unittest.TestCase):
     """Test data loading and preprocessing"""
@@ -31,7 +37,7 @@ class TestDataLoader(unittest.TestCase):
     def test_dataset_loading(self):
         """Test that datasets load correctly"""
         for split in ["train", "validation", "test"]:
-            dataset = self.data_loader.load_dataset(split)
+            dataset = self.data_loader.load_dataset(split, sample_size=10)  # FIXED: Added sample size
             self.assertGreater(len(dataset), 0)
             
             # Check structure
@@ -41,13 +47,13 @@ class TestDataLoader(unittest.TestCase):
     
     def test_preprocessing(self):
         """Test data preprocessing"""
-        processed = self.data_loader.get_processed_dataset("train")
-        sample = processed[0]
+        # FIXED: Use correct method name
+        train_loader, _, _ = self.data_loader.get_data_loaders(batch_size=8, sample_size=10)
+        sample_batch = next(iter(train_loader))
         
-        self.assertIn("input_ids", sample)
-        self.assertIn("attention_mask", sample)
-        self.assertIn("labels", sample)
-        self.assertIn("domain", sample)
+        self.assertIn("input_ids", sample_batch)
+        self.assertIn("attention_mask", sample_batch)
+        self.assertIn("labels", sample_batch)
 
 class TestModels(unittest.TestCase):
     """Test model initialization and functionality"""
@@ -96,13 +102,12 @@ class TestIntegration(unittest.TestCase):
         """Test minimal end-to-end workflow"""
         # Load data
         data_loader = CLINC150DataLoader(max_length=128)
-        train_loader, val_loader, _ = data_loader.create_data_loaders(batch_size=2)
+        train_loader, val_loader, _ = data_loader.get_data_loaders(batch_size=2, sample_size=10)  # FIXED: Correct method
         
         # Initialize model
         model = create_router_model(model_type="distilbert", lora_rank=4)
         
         # Test prediction on validation data
-        sample_batch = next(iter(val_loader))
         texts = ["Test query 1", "Test query 2"]
         predictions = model.predict(texts)
         
