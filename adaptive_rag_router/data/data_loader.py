@@ -14,18 +14,19 @@ logger = logging.getLogger(__name__)
 
 class CLINC150DataLoader:
     """Production data loader for CLINC150 with cloud optimization"""
-    
+
     DOMAIN_MAPPING = {
         'banking': 0, 'credit_cards': 1, 'work': 2, 'travel': 3, 'utility': 4,
         'auto_&_commute': 5, 'home': 6, 'kitchen_&_dining': 7, 'small_talk': 8, 'meta': 9
     }
-    
+
     DOMAIN_NAMES = list(DOMAIN_MAPPING.keys())
-    
+
     def __init__(self, model_name: str = "distilbert-base-uncased", max_length: int = 128):
         self.model_name = model_name
         self.max_length = max_length
         self.tokenizer = self._load_tokenizer()
+        self.intent_names = None  # Will be populated when dataset is loaded
         
     def _load_tokenizer(self):
         """Load tokenizer with proper error handling"""
@@ -41,7 +42,7 @@ class CLINC150DataLoader:
     def load_dataset(self, split: str = "train", sample_size: Optional[int] = None):
         """
         Load CLINC150 dataset with Kaggle optimization
-        
+
         Added cache_dir for Kaggle/Colab optimization
         """
         # Use Kaggle's working directory for caching
@@ -52,19 +53,36 @@ class CLINC150DataLoader:
         elif 'COLAB_GPU' in os.environ:
             cache_dir = "/content/hf_cache"
             os.makedirs(cache_dir, exist_ok=True)
-        
+
         dataset = load_dataset("clinc_oos", "plus", split=split, cache_dir=cache_dir)
-        
+
+        # Extract intent names from dataset features if available
+        if self.intent_names is None and 'intent' in dataset.features:
+            if hasattr(dataset.features['intent'], 'names'):
+                self.intent_names = dataset.features['intent'].names
+                logger.info(f"Loaded {len(self.intent_names)} intent names from dataset")
+
         if sample_size:
             dataset = dataset.select(range(min(sample_size, len(dataset))))
-        
+
         return dataset
     
-    def extract_domain_from_intent(self, intent: str) -> str:
-        """Extract domain from intent name"""
+    def extract_domain_from_intent(self, intent) -> str:
+        """Extract domain from intent name or index"""
+        # Handle integer intent (ClassLabel index)
+        if isinstance(intent, int):
+            if self.intent_names and intent < len(self.intent_names):
+                intent = self.intent_names[intent]
+            else:
+                logger.warning(f"Intent index {intent} out of range, defaulting to 'meta'")
+                return 'meta'
+
+        # Handle string intent
         if intent == 'oos':
             return 'meta'
-        domain = intent.split('_')[0]
+
+        # Extract domain from intent name (e.g., "banking_balance" -> "banking")
+        domain = intent.split('_')[0] if '_' in intent else intent
         return domain if domain in self.DOMAIN_MAPPING else 'meta'
     
     def preprocess_function(self, examples: Dict) -> Dict:
