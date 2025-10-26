@@ -1,8 +1,7 @@
 # File: adaptive_rag_router/models/adaptive_router.py
 """
-Production-ready model with unified interface
-Optimized for Kaggle/Colab GPU environments
-FIXED: device_map compatibility issue
+Production-ready Adaptive RAG Router
+CLEAN VERSION - Tested on Kaggle GPU
 """
 
 import torch
@@ -23,15 +22,6 @@ logger = logging.getLogger(__name__)
 
 class AdaptiveRAGRouter:
     """Production-ready Adaptive RAG Router"""
-    
-    # Models that support device_map='auto'
-    DEVICE_MAP_SUPPORTED_MODELS = [
-        "roberta",
-        "deberta", 
-        "bert-base",
-        "bert-large",
-        "albert",
-    ]
     
     def __init__(
         self,
@@ -54,7 +44,7 @@ class AdaptiveRAGRouter:
                 "r": 16,
                 "lora_alpha": 32,
                 "lora_dropout": 0.05,
-                "target_modules": ["query", "key", "value", "dense"],
+                "target_modules": ["q_lin", "k_lin", "v_lin", "out_lin"],
                 "bias": "none"
             }
         
@@ -64,15 +54,9 @@ class AdaptiveRAGRouter:
         
         self._initialize_model()
     
-    def _supports_device_map(self) -> bool:
-        """Check if model supports device_map='auto'"""
-        model_name_lower = self.model_name.lower()
-        return any(supported in model_name_lower for supported in self.DEVICE_MAP_SUPPORTED_MODELS)
-    
     def _initialize_model(self):
         """
-        Initialize model with proper error handling
-        FIXED: Completely removed device_map for DistilBERT
+        Initialize model - SIMPLIFIED for Kaggle compatibility
         """
         try:
             # Load configuration
@@ -83,27 +67,15 @@ class AdaptiveRAGRouter:
                 attention_probs_dropout_prob=0.1
             )
             
-            # GPU optimization settings
-            use_fp16 = torch.cuda.is_available()
-            
-            # CRITICAL FIX: Don't pass device_map at all for DistilBERT
-            model_kwargs = {
-                "config": config,
-                "torch_dtype": torch.float16 if use_fp16 else torch.float32,
-                "low_cpu_mem_usage": True
-            }
-            
-            # Only add device_map for models that support it (NOT DistilBERT)
-            if "distilbert" not in self.model_name.lower():
-                if (self.is_kaggle or self.is_colab) and torch.cuda.is_available():
-                    model_kwargs["device_map"] = "auto"
-                    logger.info(f"Using device_map='auto' for {self.model_name}")
-            
-            # Load model with optimizations
+            # SIMPLE: Load model directly without fancy options
+            # This avoids meta tensor issues
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_name,
-                **model_kwargs
+                config=config,
             )
+            
+            # Move to device BEFORE applying LoRA
+            self.model.to(self.device)
             
             # Apply LoRA
             peft_config = LoraConfig(
@@ -112,11 +84,6 @@ class AdaptiveRAGRouter:
             )
             
             self.model = get_peft_model(self.model, peft_config)
-            
-            # Manual device placement (always for DistilBERT)
-            if "device_map" not in model_kwargs:
-                self.model.to(self.device)
-                logger.info(f"Model moved to {self.device}")
             
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
@@ -130,9 +97,9 @@ class AdaptiveRAGRouter:
             logger.info(f"Trainable parameters: {trainable_params:,} ({trainable_params/total_params*100:.2f}%)")
             
             if self.is_kaggle:
-                logger.info("🚀 Running on Kaggle with GPU optimizations")
+                print("🚀 Running on Kaggle GPU")
             elif self.is_colab:
-                logger.info("🚀 Running on Colab with GPU optimizations")
+                print("🚀 Running on Colab GPU")
             
         except Exception as e:
             logger.error(f"Failed to initialize model: {e}")
@@ -145,9 +112,7 @@ class AdaptiveRAGRouter:
         output_dir: str = "./model_checkpoints",
         training_config: Optional[Dict] = None
     ):
-        """
-        Train the model with production-ready configuration
-        """
+        """Train the model"""
         # Use Kaggle/Colab output directory
         if self.is_kaggle:
             output_dir = output_dir.replace("./", "/kaggle/working/")
@@ -161,7 +126,7 @@ class AdaptiveRAGRouter:
                 "per_device_train_batch_size": 16,
             }
         
-        # Enhanced logging for progress tracking
+        # Enhanced logging
         from transformers import logging as hf_logging
         hf_logging.set_verbosity_info()
         
@@ -269,7 +234,6 @@ class AdaptiveRAGRouter:
     
     def save(self, path: str):
         """Save model and tokenizer"""
-        # Handle Kaggle paths
         if self.is_kaggle:
             path = path.replace("./", "/kaggle/working/")
         elif self.is_colab:
@@ -283,7 +247,6 @@ class AdaptiveRAGRouter:
         """Load model and tokenizer"""
         from peft import PeftModel
         
-        # Handle Kaggle paths
         if self.is_kaggle:
             path = path.replace("./", "/kaggle/working/")
         elif self.is_colab:
@@ -294,13 +257,16 @@ class AdaptiveRAGRouter:
         self.model.to(self.device)
         logger.info(f"Model loaded from {path}")
 
-# Factory function
+
 def create_router_model(
     model_type: str = "distilbert",
     lora_rank: int = 16,
     device: Optional[str] = None
 ) -> AdaptiveRAGRouter:
-    """Factory function to create router models"""
+    """
+    Factory function to create router models
+    FIXED: Model-specific LoRA target modules
+    """
     
     model_mapping = {
         "distilbert": "distilbert-base-uncased",
@@ -311,21 +277,21 @@ def create_router_model(
     if model_type not in model_mapping:
         raise ValueError(f"Model type {model_type} not supported. Choose from {list(model_mapping.keys())}")
     
-    # FIXED: Different target modules for different models
+    # CRITICAL: Different models have different attention layer names
     if model_type == "distilbert":
-        target_modules = ["q_lin", "k_lin", "v_lin", "out_lin"]  # DistilBERT names
+        target_modules = ["q_lin", "k_lin", "v_lin", "out_lin"]
     elif model_type == "roberta":
-        target_modules = ["query", "key", "value", "dense"]  # RoBERTa names
+        target_modules = ["query", "key", "value", "dense"]
     elif model_type == "deberta":
-        target_modules = ["query_proj", "key_proj", "value_proj", "dense"]  # DeBERTa names
+        target_modules = ["query_proj", "key_proj", "value_proj", "dense"]
     else:
-        target_modules = ["query", "key", "value", "dense"]  # Default
+        target_modules = ["query", "key", "value", "dense"]
     
     lora_config = {
         "r": lora_rank,
         "lora_alpha": lora_rank * 2,
         "lora_dropout": 0.05,
-        "target_modules": target_modules,  # Use model-specific modules
+        "target_modules": target_modules,
         "bias": "none"
     }
     
