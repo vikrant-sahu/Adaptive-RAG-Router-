@@ -33,10 +33,11 @@ class AdaptiveRAGRouter:
         self.model_name = model_name
         self.num_domains = num_domains
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Detect environment
+
+        # Detect environment and GPU setup
         self.is_kaggle = 'KAGGLE_KERNEL_RUN_TYPE' in os.environ
         self.is_colab = 'COLAB_GPU' in os.environ
+        self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
         
         # Default LoRA config
         if lora_config is None:
@@ -92,14 +93,23 @@ class AdaptiveRAGRouter:
             
             trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
             total_params = sum(p.numel() for p in self.model.parameters())
-            
+
             logger.info(f"✅ Initialized {self.model_name} on {self.device}")
             logger.info(f"Trainable parameters: {trainable_params:,} ({trainable_params/total_params*100:.2f}%)")
-            
+
+            # Log GPU information
+            if self.num_gpus > 0:
+                logger.info(f"🎮 Detected {self.num_gpus} GPU(s)")
+                for i in range(self.num_gpus):
+                    gpu_name = torch.cuda.get_device_name(i)
+                    logger.info(f"  GPU {i}: {gpu_name}")
+                if self.num_gpus > 1:
+                    logger.info(f"💡 HuggingFace Trainer will automatically use all {self.num_gpus} GPUs for training")
+
             if self.is_kaggle:
-                print("🚀 Running on Kaggle GPU")
+                print("🚀 Running on Kaggle")
             elif self.is_colab:
-                print("🚀 Running on Colab GPU")
+                print("🚀 Running on Colab")
             
         except Exception as e:
             logger.error(f"Failed to initialize model: {e}")
@@ -133,12 +143,21 @@ class AdaptiveRAGRouter:
         # Enhanced logging
         from transformers import logging as hf_logging
         hf_logging.set_verbosity_info()
-        
+
+        # Calculate effective batch size for multi-GPU
+        per_device_batch = training_config.get("per_device_train_batch_size", 16)
+        effective_batch_size = per_device_batch * max(1, self.num_gpus)
+
+        if self.num_gpus > 1:
+            logger.info(f"🚀 Multi-GPU training enabled: {self.num_gpus} GPUs")
+            logger.info(f"  Per-device batch size: {per_device_batch}")
+            logger.info(f"  Effective batch size: {effective_batch_size} ({per_device_batch} × {self.num_gpus} GPUs)")
+
         training_args = TrainingArguments(
             output_dir=output_dir,
             num_train_epochs=training_config.get("num_epochs", 5),
             learning_rate=training_config.get("learning_rate", 2e-4),
-            per_device_train_batch_size=training_config.get("per_device_train_batch_size", 16),
+            per_device_train_batch_size=per_device_batch,
             per_device_eval_batch_size=training_config.get("per_device_eval_batch_size", 32),
             warmup_ratio=0.1,
             weight_decay=0.01,
@@ -153,7 +172,7 @@ class AdaptiveRAGRouter:
             report_to=[],  # Explicitly disable all integrations (WandB, TensorBoard, etc.)
             dataloader_pin_memory=True,
             fp16=torch.cuda.is_available(),
-            dataloader_num_workers=0,
+            dataloader_num_workers=0,  # Keep 0 for Kaggle compatibility
             disable_tqdm=False,
         )
         
@@ -164,9 +183,17 @@ class AdaptiveRAGRouter:
             eval_dataset=val_loader.dataset,
             compute_metrics=self._compute_metrics,
         )
-        
+
+        # Log training setup
         logger.info("Starting training...")
         logger.info(f"Output directory: {output_dir}")
+        logger.info(f"Training samples: {len(train_loader.dataset)}")
+        logger.info(f"Validation samples: {len(val_loader.dataset)}")
+
+        if self.num_gpus > 1:
+            logger.info(f"✓ Trainer will distribute training across {self.num_gpus} GPUs")
+            logger.info(f"✓ Training speed will be approximately {self.num_gpus}x faster")
+
         trainer.train()
         
         # Save the model
