@@ -72,8 +72,7 @@ class AdaptiveRAGRouter:
     def _initialize_model(self):
         """
         Initialize model with proper error handling
-        
-        FIXED: Only use device_map for models that support it
+        FIXED: Completely removed device_map for DistilBERT
         """
         try:
             # Load configuration
@@ -87,27 +86,23 @@ class AdaptiveRAGRouter:
             # GPU optimization settings
             use_fp16 = torch.cuda.is_available()
             
-            # FIXED: Only use device_map for supported models
-            use_device_map = (
-                (self.is_kaggle or self.is_colab) and 
-                torch.cuda.is_available() and 
-                self._supports_device_map()
-            )
+            # CRITICAL FIX: Don't pass device_map at all for DistilBERT
+            model_kwargs = {
+                "config": config,
+                "torch_dtype": torch.float16 if use_fp16 else torch.float32,
+                "low_cpu_mem_usage": True
+            }
             
-            if use_device_map:
-                logger.info(f"Using device_map='auto' for {self.model_name}")
-                device_map = "auto"
-            else:
-                logger.info(f"Using manual device placement for {self.model_name}")
-                device_map = None
+            # Only add device_map for models that support it (NOT DistilBERT)
+            if "distilbert" not in self.model_name.lower():
+                if (self.is_kaggle or self.is_colab) and torch.cuda.is_available():
+                    model_kwargs["device_map"] = "auto"
+                    logger.info(f"Using device_map='auto' for {self.model_name}")
             
             # Load model with optimizations
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_name,
-                config=config,
-                torch_dtype=torch.float16 if use_fp16 else torch.float32,
-                device_map=device_map,
-                low_cpu_mem_usage=True
+                **model_kwargs
             )
             
             # Apply LoRA
@@ -118,9 +113,10 @@ class AdaptiveRAGRouter:
             
             self.model = get_peft_model(self.model, peft_config)
             
-            # Move to device only if device_map wasn't used
-            if device_map is None:
+            # Manual device placement (always for DistilBERT)
+            if "device_map" not in model_kwargs:
                 self.model.to(self.device)
+                logger.info(f"Model moved to {self.device}")
             
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
