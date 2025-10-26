@@ -113,19 +113,23 @@ class AdaptiveRAGRouter:
         training_config: Optional[Dict] = None
     ):
         """Train the model"""
+        # Disable WandB integration to avoid login errors
+        os.environ["WANDB_DISABLED"] = "true"
+        os.environ["WANDB_MODE"] = "disabled"
+
         # Use Kaggle/Colab output directory
         if self.is_kaggle:
             output_dir = output_dir.replace("./", "/kaggle/working/")
         elif self.is_colab:
             output_dir = output_dir.replace("./", "/content/")
-        
+
         if training_config is None:
             training_config = {
                 "num_epochs": 5,
                 "learning_rate": 2e-4,
                 "per_device_train_batch_size": 16,
             }
-        
+
         # Enhanced logging
         from transformers import logging as hf_logging
         hf_logging.set_verbosity_info()
@@ -146,7 +150,7 @@ class AdaptiveRAGRouter:
             load_best_model_at_end=True,
             metric_for_best_model="accuracy",
             greater_is_better=True,
-            report_to=None,
+            report_to=[],  # Explicitly disable all integrations (WandB, TensorBoard, etc.)
             dataloader_pin_memory=True,
             fp16=torch.cuda.is_available(),
             dataloader_num_workers=0,
