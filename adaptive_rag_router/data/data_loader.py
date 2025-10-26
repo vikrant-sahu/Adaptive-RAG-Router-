@@ -5,7 +5,6 @@ Production-ready data loader with environment detection
 
 import os  # ADDED: Missing import
 import logging
-import numpy as np
 from typing import Dict, Tuple, Optional
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
