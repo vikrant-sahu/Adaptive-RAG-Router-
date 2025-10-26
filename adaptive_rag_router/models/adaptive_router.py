@@ -225,16 +225,113 @@ class AdaptiveRAGRouter:
         """Compute metrics for evaluation"""
         import numpy as np
         from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-        
+
         predictions, labels = eval_pred
         predictions = np.argmax(predictions, axis=1)
-        
+
         return {
             "accuracy": accuracy_score(labels, predictions),
             "f1": f1_score(labels, predictions, average="weighted"),
             "precision": precision_score(labels, predictions, average="weighted"),
             "recall": recall_score(labels, predictions, average="weighted"),
         }
+
+    def evaluate_with_detailed_metrics(self, test_loader):
+        """
+        Comprehensive evaluation with detailed metrics including confusion matrix.
+
+        Args:
+            test_loader: DataLoader for test dataset
+
+        Returns:
+            Dictionary containing:
+                - accuracy: Overall accuracy
+                - precision: Weighted precision
+                - recall: Weighted recall
+                - f1: Weighted F1 score
+                - per_class_metrics: Metrics for each class
+                - confusion_matrix: Confusion matrix
+                - classification_report: Detailed classification report
+        """
+        import numpy as np
+        from sklearn.metrics import (
+            accuracy_score, precision_score, recall_score, f1_score,
+            confusion_matrix, classification_report
+        )
+
+        self.model.eval()
+        all_predictions = []
+        all_labels = []
+
+        logger.info("Running detailed evaluation...")
+
+        with torch.no_grad():
+            for batch in test_loader:
+                # Move batch to device
+                inputs = {
+                    'input_ids': batch['input_ids'].to(self.device),
+                    'attention_mask': batch['attention_mask'].to(self.device)
+                }
+                labels = batch['labels'].to(self.device)
+
+                # Get predictions
+                outputs = self.model(**inputs)
+                predictions = torch.argmax(outputs.logits, dim=-1)
+
+                all_predictions.extend(predictions.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+
+        all_predictions = np.array(all_predictions)
+        all_labels = np.array(all_labels)
+
+        # Calculate metrics
+        accuracy = accuracy_score(all_labels, all_predictions)
+        precision = precision_score(all_labels, all_predictions, average='weighted', zero_division=0)
+        recall = recall_score(all_labels, all_predictions, average='weighted', zero_division=0)
+        f1 = f1_score(all_labels, all_predictions, average='weighted', zero_division=0)
+
+        # Per-class metrics
+        precision_per_class = precision_score(all_labels, all_predictions, average=None, zero_division=0)
+        recall_per_class = recall_score(all_labels, all_predictions, average=None, zero_division=0)
+        f1_per_class = f1_score(all_labels, all_predictions, average=None, zero_division=0)
+
+        # Confusion matrix
+        cm = confusion_matrix(all_labels, all_predictions)
+
+        # Classification report
+        from adaptive_rag_router.data.data_loader import CLINC150DataLoader
+        target_names = CLINC150DataLoader.DOMAIN_NAMES
+        report = classification_report(
+            all_labels,
+            all_predictions,
+            target_names=target_names,
+            zero_division=0
+        )
+
+        # Per-class metrics dictionary
+        per_class_metrics = {}
+        for i, domain_name in enumerate(target_names):
+            per_class_metrics[domain_name] = {
+                'precision': float(precision_per_class[i]),
+                'recall': float(recall_per_class[i]),
+                'f1': float(f1_per_class[i])
+            }
+
+        results = {
+            'accuracy': float(accuracy),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1': float(f1),
+            'per_class_metrics': per_class_metrics,
+            'confusion_matrix': cm.tolist(),
+            'classification_report': report,
+            'num_samples': len(all_labels)
+        }
+
+        logger.info(f"Evaluation completed on {len(all_labels)} samples")
+        logger.info(f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+
+        return results
     
     def save(self, path: str):
         """Save model and tokenizer"""
