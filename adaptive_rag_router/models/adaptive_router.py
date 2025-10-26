@@ -311,11 +311,21 @@ def create_router_model(
     if model_type not in model_mapping:
         raise ValueError(f"Model type {model_type} not supported. Choose from {list(model_mapping.keys())}")
     
+    # FIXED: Different target modules for different models
+    if model_type == "distilbert":
+        target_modules = ["q_lin", "k_lin", "v_lin", "out_lin"]  # DistilBERT names
+    elif model_type == "roberta":
+        target_modules = ["query", "key", "value", "dense"]  # RoBERTa names
+    elif model_type == "deberta":
+        target_modules = ["query_proj", "key_proj", "value_proj", "dense"]  # DeBERTa names
+    else:
+        target_modules = ["query", "key", "value", "dense"]  # Default
+    
     lora_config = {
         "r": lora_rank,
         "lora_alpha": lora_rank * 2,
         "lora_dropout": 0.05,
-        "target_modules": ["query", "key", "value", "dense"],
+        "target_modules": target_modules,  # Use model-specific modules
         "bias": "none"
     }
     
