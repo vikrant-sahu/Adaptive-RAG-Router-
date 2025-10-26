@@ -5,10 +5,12 @@ Production-ready data loader with environment detection
 
 import os  # ADDED: Missing import
 import logging
+import numpy as np
 from typing import Dict, Tuple, Optional
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
-from torch.utils.data import DataLoader 
+from torch.utils.data import DataLoader
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +148,55 @@ class CLINC150DataLoader:
         """Get small dataset for quick demos"""
         return self.get_data_loaders(batch_size=8, sample_size=num_samples)
 
+    def _stratified_split_indices(self, labels: list, split_ratio: float, seed: int = 42) -> Tuple[list, list]:
+        """
+        Perform stratified split on dataset indices based on labels.
+
+        Args:
+            labels: List of class labels
+            split_ratio: Ratio for first split (e.g., 0.7 means 70% first, 30% second)
+            seed: Random seed for reproducibility
+
+        Returns:
+            Tuple of (first_split_indices, second_split_indices)
+        """
+        from sklearn.model_selection import train_test_split
+
+        indices = list(range(len(labels)))
+        first_indices, second_indices = train_test_split(
+            indices,
+            train_size=split_ratio,
+            stratify=labels,
+            random_state=seed
+        )
+
+        return first_indices, second_indices
+
+    def _log_class_distribution(self, dataset, split_name: str):
+        """Log the distribution of domain classes in a dataset split."""
+        # Extract domain labels
+        domains = [self.extract_domain_from_intent(item['intent']) for item in dataset]
+        domain_labels = [self.DOMAIN_MAPPING[domain] for domain in domains]
+
+        # Count occurrences
+        label_counts = Counter(domain_labels)
+
+        logger.info(f"\n{split_name} class distribution:")
+        total = len(domain_labels)
+        for label_idx in sorted(label_counts.keys()):
+            domain_name = self.DOMAIN_NAMES[label_idx]
+            count = label_counts[label_idx]
+            percentage = (count / total) * 100
+            logger.info(f"  {domain_name:20s}: {count:5d} samples ({percentage:5.2f}%)")
+
+        # Check if all 10 classes are present
+        if len(label_counts) == 10:
+            logger.info(f"  ✓ All 10 domain classes present in {split_name}")
+        else:
+            missing = set(range(10)) - set(label_counts.keys())
+            missing_names = [self.DOMAIN_NAMES[i] for i in missing]
+            logger.warning(f"  ⚠ Missing classes in {split_name}: {missing_names}")
+
     def get_custom_split_loaders(
         self,
         batch_size: int = 32,
@@ -154,7 +205,9 @@ class CLINC150DataLoader:
         seed: int = 42
     ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
-        Get data loaders with custom train/validation/test split.
+        Get data loaders with custom train/validation/test split using stratified sampling.
+
+        Ensures all 10 domain classes are proportionally represented in each split.
 
         Args:
             batch_size: Batch size for data loaders
@@ -171,10 +224,12 @@ class CLINC150DataLoader:
             - Of that 70%, 15% is used for validation (10.5% of total)
             - Of that 70%, 85% is used for training (59.5% of total)
             - Remaining 30% is used for testing
+
+            Each split maintains proportional representation of all 10 domain classes.
         """
         from datasets import concatenate_datasets
 
-        logger.info(f"Creating custom split with {train_val_ratio*100:.0f}% train+val, {(1-train_val_ratio)*100:.0f}% test")
+        logger.info(f"Creating stratified custom split with {train_val_ratio*100:.0f}% train+val, {(1-train_val_ratio)*100:.0f}% test")
 
         # Load all available splits and concatenate them
         train_data = self.load_dataset("train")
@@ -184,27 +239,49 @@ class CLINC150DataLoader:
         # Concatenate all data
         full_dataset = concatenate_datasets([train_data, val_data, test_data])
 
-        # Shuffle the full dataset
-        full_dataset = full_dataset.shuffle(seed=seed)
+        # Extract domain labels for stratification
+        logger.info("Extracting domain labels for stratified sampling...")
+        domains = [self.extract_domain_from_intent(item['intent']) for item in full_dataset]
+        domain_labels = [self.DOMAIN_MAPPING[domain] for domain in domains]
 
-        # Calculate split sizes
+        # Log original distribution
+        logger.info(f"\nTotal dataset size: {len(full_dataset)} samples")
+        original_counts = Counter(domain_labels)
+        for label_idx in sorted(original_counts.keys()):
+            domain_name = self.DOMAIN_NAMES[label_idx]
+            count = original_counts[label_idx]
+            logger.info(f"  {domain_name:20s}: {count:5d} samples")
+
+        # Stratified split: first split into train+val and test
+        train_val_indices, test_indices = self._stratified_split_indices(
+            domain_labels, train_val_ratio, seed
+        )
+
+        train_val_dataset = full_dataset.select(train_val_indices)
+        test_dataset = full_dataset.select(test_indices)
+
+        # Extract labels for train_val split
+        train_val_domains = [self.extract_domain_from_intent(item['intent']) for item in train_val_dataset]
+        train_val_labels = [self.DOMAIN_MAPPING[domain] for domain in train_val_domains]
+
+        # Stratified split: further split train_val into train and validation
+        train_indices_local, val_indices_local = self._stratified_split_indices(
+            train_val_labels, 1 - val_split, seed
+        )
+
+        train_dataset = train_val_dataset.select(train_indices_local)
+        val_dataset = train_val_dataset.select(val_indices_local)
+
         total_size = len(full_dataset)
-        train_val_size = int(total_size * train_val_ratio)
+        logger.info(f"\n✓ Stratified split completed:")
+        logger.info(f"  Train: {len(train_dataset):6d} samples ({len(train_dataset)/total_size*100:.1f}%)")
+        logger.info(f"  Val:   {len(val_dataset):6d} samples ({len(val_dataset)/total_size*100:.1f}%)")
+        logger.info(f"  Test:  {len(test_dataset):6d} samples ({len(test_dataset)/total_size*100:.1f}%)")
 
-        # Split into train+val and test
-        train_val_dataset = full_dataset.select(range(train_val_size))
-        test_dataset = full_dataset.select(range(train_val_size, total_size))
-
-        # Further split train_val into train and validation
-        train_val_size_actual = len(train_val_dataset)
-        val_size = int(train_val_size_actual * val_split)
-        train_size = train_val_size_actual - val_size
-
-        train_dataset = train_val_dataset.select(range(train_size))
-        val_dataset = train_val_dataset.select(range(train_size, train_val_size_actual))
-
-        logger.info(f"Split sizes - Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
-        logger.info(f"Percentages - Train: {len(train_dataset)/total_size*100:.1f}%, Val: {len(val_dataset)/total_size*100:.1f}%, Test: {len(test_dataset)/total_size*100:.1f}%")
+        # Log class distributions for verification
+        self._log_class_distribution(train_dataset, "TRAIN")
+        self._log_class_distribution(val_dataset, "VALIDATION")
+        self._log_class_distribution(test_dataset, "TEST")
 
         # Preprocess datasets
         train_dataset = train_dataset.map(self.preprocess_function, batched=True)
