@@ -63,10 +63,16 @@ class ModelTrainer:
         if self.is_cloud:
             training_config.setdefault("num_epochs", 3)
             training_config.setdefault("per_device_train_batch_size", 16)
-            sample_size = sample_size or 1000  # Smaller samples for quick results
+            # Note: sample_size can be None to use full dataset
 
         # Initialize data loader
         data_loader = CLINC150DataLoader(model_name=model_config["model_name"])
+
+        # Log dataset usage
+        if sample_size:
+            logger.info(f"Using sample_size={sample_size} for quick training")
+        else:
+            logger.info("Using full dataset for training")
 
         # Load data with appropriate split method
         if use_custom_split:

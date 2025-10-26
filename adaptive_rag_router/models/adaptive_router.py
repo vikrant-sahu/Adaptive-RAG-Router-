@@ -290,27 +290,39 @@ class AdaptiveRAGRouter:
         recall = recall_score(all_labels, all_predictions, average='weighted', zero_division=0)
         f1 = f1_score(all_labels, all_predictions, average='weighted', zero_division=0)
 
-        # Per-class metrics
-        precision_per_class = precision_score(all_labels, all_predictions, average=None, zero_division=0)
-        recall_per_class = recall_score(all_labels, all_predictions, average=None, zero_division=0)
-        f1_per_class = f1_score(all_labels, all_predictions, average=None, zero_division=0)
+        # Get unique labels present in test data
+        unique_labels = sorted(np.unique(np.concatenate([all_labels, all_predictions])))
+
+        # Get domain names for the unique labels
+        from adaptive_rag_router.data.data_loader import CLINC150DataLoader
+        all_domain_names = CLINC150DataLoader.DOMAIN_NAMES
+
+        # Create target_names only for the labels present in the data
+        target_names = [all_domain_names[label] for label in unique_labels]
+
+        logger.info(f"Test set contains {len(unique_labels)} unique domains: {target_names}")
+
+        # Per-class metrics (only for present labels)
+        precision_per_class = precision_score(all_labels, all_predictions, labels=unique_labels, average=None, zero_division=0)
+        recall_per_class = recall_score(all_labels, all_predictions, labels=unique_labels, average=None, zero_division=0)
+        f1_per_class = f1_score(all_labels, all_predictions, labels=unique_labels, average=None, zero_division=0)
 
         # Confusion matrix
-        cm = confusion_matrix(all_labels, all_predictions)
+        cm = confusion_matrix(all_labels, all_predictions, labels=unique_labels)
 
-        # Classification report
-        from adaptive_rag_router.data.data_loader import CLINC150DataLoader
-        target_names = CLINC150DataLoader.DOMAIN_NAMES
+        # Classification report (only for present labels)
         report = classification_report(
             all_labels,
             all_predictions,
+            labels=unique_labels,
             target_names=target_names,
             zero_division=0
         )
 
         # Per-class metrics dictionary
         per_class_metrics = {}
-        for i, domain_name in enumerate(target_names):
+        for i, label_idx in enumerate(unique_labels):
+            domain_name = all_domain_names[label_idx]
             per_class_metrics[domain_name] = {
                 'precision': float(precision_per_class[i]),
                 'recall': float(recall_per_class[i]),
