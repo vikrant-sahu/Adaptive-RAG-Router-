@@ -145,3 +145,90 @@ class CLINC150DataLoader:
     def get_quick_demo_data(self, num_samples: int = 100):
         """Get small dataset for quick demos"""
         return self.get_data_loaders(batch_size=8, sample_size=num_samples)
+
+    def get_custom_split_loaders(
+        self,
+        batch_size: int = 32,
+        train_val_ratio: float = 0.7,
+        val_split: float = 0.15,
+        seed: int = 42
+    ) -> Tuple[DataLoader, DataLoader, DataLoader]:
+        """
+        Get data loaders with custom train/validation/test split.
+
+        Args:
+            batch_size: Batch size for data loaders
+            train_val_ratio: Ratio of data to use for train+validation (default: 0.7 for 70%)
+            val_split: Ratio of train_val data to use for validation (default: 0.15)
+            seed: Random seed for reproducibility
+
+        Returns:
+            Tuple of (train_loader, val_loader, test_loader)
+
+        Example:
+            With train_val_ratio=0.7 and val_split=0.15:
+            - 70% of data is used for training and validation
+            - Of that 70%, 15% is used for validation (10.5% of total)
+            - Of that 70%, 85% is used for training (59.5% of total)
+            - Remaining 30% is used for testing
+        """
+        from datasets import concatenate_datasets
+
+        logger.info(f"Creating custom split with {train_val_ratio*100:.0f}% train+val, {(1-train_val_ratio)*100:.0f}% test")
+
+        # Load all available splits and concatenate them
+        train_data = self.load_dataset("train")
+        val_data = self.load_dataset("validation")
+        test_data = self.load_dataset("test")
+
+        # Concatenate all data
+        full_dataset = concatenate_datasets([train_data, val_data, test_data])
+
+        # Shuffle the full dataset
+        full_dataset = full_dataset.shuffle(seed=seed)
+
+        # Calculate split sizes
+        total_size = len(full_dataset)
+        train_val_size = int(total_size * train_val_ratio)
+
+        # Split into train+val and test
+        train_val_dataset = full_dataset.select(range(train_val_size))
+        test_dataset = full_dataset.select(range(train_val_size, total_size))
+
+        # Further split train_val into train and validation
+        train_val_size_actual = len(train_val_dataset)
+        val_size = int(train_val_size_actual * val_split)
+        train_size = train_val_size_actual - val_size
+
+        train_dataset = train_val_dataset.select(range(train_size))
+        val_dataset = train_val_dataset.select(range(train_size, train_val_size_actual))
+
+        logger.info(f"Split sizes - Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
+        logger.info(f"Percentages - Train: {len(train_dataset)/total_size*100:.1f}%, Val: {len(val_dataset)/total_size*100:.1f}%, Test: {len(test_dataset)/total_size*100:.1f}%")
+
+        # Preprocess datasets
+        train_dataset = train_dataset.map(self.preprocess_function, batched=True)
+        val_dataset = val_dataset.map(self.preprocess_function, batched=True)
+        test_dataset = test_dataset.map(self.preprocess_function, batched=True)
+
+        # Remove original columns to save memory
+        columns_to_remove = ['text', 'intent']
+        for col in columns_to_remove:
+            if col in train_dataset.column_names:
+                train_dataset = train_dataset.remove_columns([col])
+            if col in val_dataset.column_names:
+                val_dataset = val_dataset.remove_columns([col])
+            if col in test_dataset.column_names:
+                test_dataset = test_dataset.remove_columns([col])
+
+        # Set format for PyTorch
+        train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+        val_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+        test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+
+        # Create data loaders
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        return train_loader, val_loader, test_loader
