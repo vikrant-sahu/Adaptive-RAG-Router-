@@ -2,6 +2,7 @@
 """
 Production-ready model with unified interface
 Optimized for Kaggle/Colab GPU environments
+FIXED: device_map compatibility issue
 """
 
 import torch
@@ -22,6 +23,15 @@ logger = logging.getLogger(__name__)
 
 class AdaptiveRAGRouter:
     """Production-ready Adaptive RAG Router"""
+    
+    # Models that support device_map='auto'
+    DEVICE_MAP_SUPPORTED_MODELS = [
+        "roberta",
+        "deberta", 
+        "bert-base",
+        "bert-large",
+        "albert",
+    ]
     
     def __init__(
         self,
@@ -54,14 +64,16 @@ class AdaptiveRAGRouter:
         
         self._initialize_model()
     
+    def _supports_device_map(self) -> bool:
+        """Check if model supports device_map='auto'"""
+        model_name_lower = self.model_name.lower()
+        return any(supported in model_name_lower for supported in self.DEVICE_MAP_SUPPORTED_MODELS)
+    
     def _initialize_model(self):
         """
         Initialize model with proper error handling
         
-        CHANGE 4: Added GPU optimization for Kaggle
-        - device_map="auto" for automatic GPU placement
-        - low_cpu_mem_usage for faster loading
-        - Explicit FP16 handling for Kaggle T4 GPUs
+        FIXED: Only use device_map for models that support it
         """
         try:
             # Load configuration
@@ -72,17 +84,30 @@ class AdaptiveRAGRouter:
                 attention_probs_dropout_prob=0.1
             )
             
-            # CHANGE 4: Kaggle GPU optimization
+            # GPU optimization settings
             use_fp16 = torch.cuda.is_available()
-            device_map = "auto" if (self.is_kaggle or self.is_colab) and torch.cuda.is_available() else None
+            
+            # FIXED: Only use device_map for supported models
+            use_device_map = (
+                (self.is_kaggle or self.is_colab) and 
+                torch.cuda.is_available() and 
+                self._supports_device_map()
+            )
+            
+            if use_device_map:
+                logger.info(f"Using device_map='auto' for {self.model_name}")
+                device_map = "auto"
+            else:
+                logger.info(f"Using manual device placement for {self.model_name}")
+                device_map = None
             
             # Load model with optimizations
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_name,
                 config=config,
                 torch_dtype=torch.float16 if use_fp16 else torch.float32,
-                device_map=device_map,  # Auto GPU placement on Kaggle
-                low_cpu_mem_usage=True  # Faster loading
+                device_map=device_map,
+                low_cpu_mem_usage=True
             )
             
             # Apply LoRA
@@ -105,7 +130,7 @@ class AdaptiveRAGRouter:
             trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
             total_params = sum(p.numel() for p in self.model.parameters())
             
-            logger.info(f"Initialized {self.model_name} on {self.device}")
+            logger.info(f"✅ Initialized {self.model_name} on {self.device}")
             logger.info(f"Trainable parameters: {trainable_params:,} ({trainable_params/total_params*100:.2f}%)")
             
             if self.is_kaggle:
@@ -126,11 +151,8 @@ class AdaptiveRAGRouter:
     ):
         """
         Train the model with production-ready configuration
-        
-        CHANGE 2: Use Kaggle output directory
-        CHANGE 5: Add progress bars and better logging
         """
-        # CHANGE 2: Use Kaggle/Colab output directory
+        # Use Kaggle/Colab output directory
         if self.is_kaggle:
             output_dir = output_dir.replace("./", "/kaggle/working/")
         elif self.is_colab:
@@ -143,7 +165,7 @@ class AdaptiveRAGRouter:
                 "per_device_train_batch_size": 16,
             }
         
-        # CHANGE 5: Enhanced logging for progress tracking
+        # Enhanced logging for progress tracking
         from transformers import logging as hf_logging
         hf_logging.set_verbosity_info()
         
@@ -164,10 +186,10 @@ class AdaptiveRAGRouter:
             metric_for_best_model="accuracy",
             greater_is_better=True,
             report_to=None,
-            dataloader_pin_memory=True,  # CHANGE: Set to True for GPU performance
+            dataloader_pin_memory=True,
             fp16=torch.cuda.is_available(),
-            dataloader_num_workers=0,  # Kaggle compatibility
-            disable_tqdm=False,  # CHANGE 5: Enable progress bars
+            dataloader_num_workers=0,
+            disable_tqdm=False,
         )
         
         trainer = Trainer(
@@ -188,7 +210,7 @@ class AdaptiveRAGRouter:
         
         logger.info(f"✅ Training completed. Model saved to {output_dir}")
         
-        # CHANGE 6: GPU memory cleanup
+        # GPU memory cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             logger.info("🧹 GPU memory cleared")
@@ -251,7 +273,7 @@ class AdaptiveRAGRouter:
     
     def save(self, path: str):
         """Save model and tokenizer"""
-        # CHANGE 2: Handle Kaggle paths
+        # Handle Kaggle paths
         if self.is_kaggle:
             path = path.replace("./", "/kaggle/working/")
         elif self.is_colab:
@@ -265,7 +287,7 @@ class AdaptiveRAGRouter:
         """Load model and tokenizer"""
         from peft import PeftModel
         
-        # CHANGE 2: Handle Kaggle paths
+        # Handle Kaggle paths
         if self.is_kaggle:
             path = path.replace("./", "/kaggle/working/")
         elif self.is_colab:
